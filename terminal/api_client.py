@@ -1,14 +1,38 @@
 import json
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .config import PRESETS_FILE, DATA_DIR
 
 router = APIRouter()
+
+# ── Endpoint URL validation ────────────────────────────────────────────────────
+
+_ALLOWED_ENDPOINTS = {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com",
+}
+
+
+def _validate_endpoint(provider: str, endpoint: str) -> None:
+    parsed = urlparse(endpoint)
+    if parsed.scheme not in ("https", "http"):
+        raise HTTPException(status_code=400, detail="Invalid endpoint URL scheme")
+    is_localhost = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+    if parsed.scheme == "http" and not is_localhost:
+        raise HTTPException(status_code=400, detail="HTTP endpoints are not allowed (use HTTPS)")
+    if provider in _ALLOWED_ENDPOINTS:
+        allowed = _ALLOWED_ENDPOINTS[provider]
+        if not endpoint.startswith(allowed):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Endpoint for provider '{provider}' must start with {allowed}",
+            )
 
 
 # ── Preset management ─────────────────────────────────────────────────────────
@@ -63,19 +87,25 @@ def save_presets(presets: list[dict]):
         json.dump(presets, f, indent=2)
 
 
+def _strip_api_key(preset: dict) -> dict:
+    """Return preset without api_key field (keys are stored in browser only)."""
+    return {k: v for k, v in preset.items() if k != "api_key"}
+
+
 @router.get("/api/presets")
 async def get_presets():
-    return load_presets()
+    return [_strip_api_key(p) for p in load_presets()]
 
 
 @router.put("/api/presets/{slot_id}")
 async def save_preset(slot_id: int, request: Request):
     data = await request.json()
+    data.pop("api_key", None)  # never persist API keys server-side
     presets = load_presets()
     if 0 <= slot_id < len(presets):
         presets[slot_id] = {**presets[slot_id], **data, "id": slot_id}
     save_presets(presets)
-    return presets[slot_id]
+    return _strip_api_key(presets[slot_id])
 
 
 # ── AI API proxy ───────────────────────────────────────────────────────────────
@@ -94,6 +124,7 @@ class AIRequest(BaseModel):
 
 @router.post("/api/ai-client")
 async def ai_client(req: AIRequest):
+    _validate_endpoint(req.provider, req.endpoint)
     if req.provider == "anthropic":
         headers = {
             "x-api-key": req.api_key,

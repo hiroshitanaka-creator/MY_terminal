@@ -66,6 +66,11 @@
     cursor: pointer;
     border: 1px solid var(--border);
   }
+  #token-badge.danger {
+    background: rgba(248,81,73,0.15);
+    color: var(--danger);
+    border-color: var(--danger);
+  }
 
   /* ── Tab content area ── */
   #content {
@@ -514,7 +519,19 @@ function promptToken() {
     TOKEN = t;
     localStorage.setItem('my_terminal_token', t);
     showToast('Token saved');
+    updateTokenBadge();
     connectPTY();
+  }
+}
+
+function updateTokenBadge() {
+  const badge = document.getElementById('token-badge');
+  if (TOKEN === 'changeme') {
+    badge.textContent = '⚠️ changeme';
+    badge.classList.add('danger');
+  } else {
+    badge.textContent = '🔑 Token';
+    badge.classList.remove('danger');
   }
 }
 
@@ -666,7 +683,8 @@ function loadPreset(idx) {
   if (!p) return;
   document.getElementById('preset-name').value = p.name || '';
   document.getElementById('api-provider').value = p.provider || 'anthropic';
-  document.getElementById('api-key').value = p.api_key || '';
+  // API key is stored only in localStorage, never on the server
+  document.getElementById('api-key').value = localStorage.getItem('apikey_' + idx) || '';
   document.getElementById('api-endpoint').value = p.endpoint || '';
   document.getElementById('api-model').value = p.model || '';
   document.getElementById('api-system').value = p.system || '';
@@ -676,10 +694,16 @@ function loadPreset(idx) {
 
 async function savePreset() {
   const idx = parseInt(document.getElementById('preset-sel').value);
+  const apiKey = document.getElementById('api-key').value;
+  // Save API key only in localStorage (never send to server)
+  if (apiKey) {
+    localStorage.setItem('apikey_' + idx, apiKey);
+  } else {
+    localStorage.removeItem('apikey_' + idx);
+  }
   const data = {
     name: document.getElementById('preset-name').value,
     provider: document.getElementById('api-provider').value,
-    api_key: document.getElementById('api-key').value,
     endpoint: document.getElementById('api-endpoint').value,
     model: document.getElementById('api-model').value,
     system: document.getElementById('api-system').value,
@@ -883,6 +907,7 @@ if ('serviceWorker' in navigator) {
 
 // ─── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  updateTokenBadge();
   initTerminal();
   connectPTY();
   loadPresets();
