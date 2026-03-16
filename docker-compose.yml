@@ -1,0 +1,15 @@
+services:
+  terminal:
+    build: .
+    ports:
+      - "${PORT:-8765}:8765"
+    environment:
+      MY_TERMINAL_TOKEN: "${MY_TERMINAL_TOKEN:-changeme}"
+    volumes:
+      # Persist API presets across restarts
+      - ./data:/app/data
+      # Mount workspace for multi-repo use
+      - .:/workspace
+    restart: unless-stopped
+    tty: true
+    stdin_open: true

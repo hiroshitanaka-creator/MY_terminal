@@ -1,0 +1,17 @@
+{
+  "name": "MY Terminal",
+  "short_name": "Terminal",
+  "description": "iPhone-optimized Python web terminal",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d1117",
+  "theme_color": "#1a1a2e",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='24' fill='%230d1117'/><polyline points='32,136 80,88 32,40' stroke='%2358a6ff' stroke-width='16' fill='none' stroke-linecap='round' stroke-linejoin='round'/><line x1='96' y1='152' x2='160' y2='152' stroke='%2358a6ff' stroke-width='16' stroke-linecap='round'/></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
