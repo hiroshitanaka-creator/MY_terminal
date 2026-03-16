@@ -1,0 +1,19 @@
+# Virtual environments
+.venv_terminal/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Runtime data (API presets contain API keys - never commit)
+data/
+
+# Environment files
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
