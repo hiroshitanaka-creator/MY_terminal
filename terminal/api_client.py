@@ -1,9 +1,10 @@
 import json
 import os
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import httpx
 from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .config import PRESETS_FILE, DATA_DIR
@@ -141,3 +142,91 @@ async def ai_client(req: AIRequest):
         "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text,
         "elapsed_ms": int(resp.elapsed.total_seconds() * 1000),
     }
+
+
+@router.post("/api/ai-stream")
+async def ai_stream(req: AIRequest):
+    """SSE streaming endpoint — returns text/event-stream."""
+
+    async def generate() -> AsyncGenerator[str, None]:
+        try:
+            if req.provider == "anthropic":
+                headers = {
+                    "x-api-key": req.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                }
+                body: dict[str, Any] = {
+                    "model": req.model,
+                    "max_tokens": req.max_tokens,
+                    "system": req.system,
+                    "messages": req.messages,
+                    "stream": True,
+                }
+            elif req.provider == "openai":
+                headers = {
+                    "Authorization": f"Bearer {req.api_key}",
+                    "content-type": "application/json",
+                }
+                msgs: list[dict[str, Any]] = []
+                if req.system:
+                    msgs.append({"role": "system", "content": req.system})
+                msgs.extend(req.messages)
+                body = {
+                    "model": req.model,
+                    "messages": msgs,
+                    "max_tokens": req.max_tokens,
+                    "temperature": req.temperature,
+                    "stream": True,
+                }
+            else:
+                headers = {
+                    "Authorization": f"Bearer {req.api_key}",
+                    "content-type": "application/json",
+                }
+                body = {
+                    "model": req.model,
+                    "messages": req.messages,
+                    "stream": True,
+                }
+
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream("POST", req.endpoint, headers=headers, json=body) as resp:
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            yield "data: [DONE]\n\n"
+                            return
+                        try:
+                            data = json.loads(data_str)
+                            text: str | None = None
+                            if req.provider == "anthropic":
+                                if data.get("type") == "content_block_delta":
+                                    text = data.get("delta", {}).get("text", "")
+                                elif data.get("type") == "message_stop":
+                                    yield "data: [DONE]\n\n"
+                                    return
+                            else:
+                                choices = data.get("choices", [])
+                                if choices:
+                                    text = choices[0].get("delta", {}).get("content", "")
+                                    if choices[0].get("finish_reason") == "stop":
+                                        yield "data: [DONE]\n\n"
+                                        return
+                            if text:
+                                yield f"data: {json.dumps({'text': text})}\n\n"
+                        except json.JSONDecodeError:
+                            pass
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

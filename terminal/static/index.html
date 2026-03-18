@@ -308,6 +308,74 @@
     padding: 4px;
     flex-shrink: 0;
   }
+
+  /* ── AI Panel ── */
+  #ai-panel {
+    position: absolute;
+    bottom: 0; left: 0; right: 0; height: 100%;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+    z-index: 50;
+    border-top: 2px solid var(--accent);
+  }
+  #ai-panel.open { transform: translateY(0); }
+  .ai-panel-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .ai-panel-title { font-weight: 600; font-size: 15px; color: var(--accent); white-space: nowrap; }
+  .ai-ctx-label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--text-muted);
+    cursor: pointer; white-space: nowrap;
+  }
+  .ai-ctx-label input { width: auto; margin: 0; padding: 0; border: none; background: none; }
+  .ai-icon-btn {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 18px; cursor: pointer; padding: 4px 6px; flex-shrink: 0;
+  }
+  .ai-icon-btn:active { color: var(--text); }
+  #ai-chat-messages {
+    flex: 1; overflow-y: auto; padding: 12px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .ai-bubble {
+    max-width: 88%; padding: 10px 14px; border-radius: 16px;
+    font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  }
+  .ai-bubble.user {
+    align-self: flex-end; background: var(--accent); color: #0d1117;
+    border-bottom-right-radius: 4px;
+  }
+  .ai-bubble.assistant {
+    align-self: flex-start; background: var(--surface);
+    border: 1px solid var(--border); color: var(--text);
+    border-bottom-left-radius: 4px;
+  }
+  .ai-bubble.streaming::after { content: '▊'; animation: ai-blink 1s step-end infinite; }
+  @keyframes ai-blink { 50% { opacity: 0; } }
+  .ai-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 32px 16px; line-height: 1.7; }
+  .ai-panel-footer {
+    display: flex; gap: 8px; padding: 8px;
+    background: var(--surface); border-top: 1px solid var(--border); flex-shrink: 0;
+  }
+  .ai-panel-footer textarea { flex: 1; resize: none; font-size: 14px; min-height: 44px; max-height: 120px; }
+  .ai-send-btn {
+    background: var(--accent); color: #0d1117; border: none;
+    border-radius: 8px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+    cursor: pointer; min-height: 44px; align-self: flex-end; flex-shrink: 0;
+  }
+  .ai-send-btn:disabled { opacity: 0.4; }
+  .key-btn.ai-btn {
+    color: var(--accent); border-color: rgba(88,166,255,0.4);
+    background: rgba(88,166,255,0.05);
+  }
+  .key-btn.ai-btn:active { background: var(--accent); color: #000; }
 </style>
 </head>
 <body>
@@ -339,6 +407,9 @@
       <button class="key-btn" onclick="termKey('\x7f')">Del</button>
       <button class="key-btn" onclick="termKey('\x1b')">Esc</button>
       <button class="key-btn" onclick="clearTerm()">Clear</button>
+      <button class="key-btn ai-btn" onclick="aiExplain()">Explain</button>
+      <button class="key-btn ai-btn" onclick="aiSuggest()">Suggest</button>
+      <button class="key-btn ai-btn" id="ai-toggle-btn" onclick="toggleAiPanel()">AI ✦</button>
     </div>
     <div id="terminal-container"></div>
   </div>
@@ -467,6 +538,27 @@
         </div>
         <textarea id="fmt-output" rows="12" class="mono" readonly></textarea>
       </div>
+    </div>
+  </div>
+
+  <!-- ── AI Panel (slides up over terminal) ── -->
+  <div id="ai-panel">
+    <div class="ai-panel-header">
+      <span class="ai-panel-title">✦ AI</span>
+      <select id="ai-preset-sel" style="flex:1;max-width:130px;font-size:12px;padding:4px 6px;height:30px"></select>
+      <label class="ai-ctx-label">
+        <input type="checkbox" id="ai-ctx-toggle" checked>
+        端末文脈
+      </label>
+      <button class="ai-icon-btn" onclick="clearAiChat()" title="会話をクリア">↺</button>
+      <button class="ai-icon-btn" onclick="closeAiPanel()">✕</button>
+    </div>
+    <div id="ai-chat-messages">
+      <div class="ai-empty">ターミナルの出力についてAIに質問できます。<br>「Explain」「Suggest」ボタンですぐに分析できます。</div>
+    </div>
+    <div class="ai-panel-footer">
+      <textarea id="ai-input" rows="2" placeholder="AIに質問… (Enterで送信、Shift+Enterで改行)" onkeydown="aiInputKeydown(event)"></textarea>
+      <button class="ai-send-btn" id="ai-send-btn" onclick="sendAiMessage()">送信</button>
     </div>
   </div>
 
@@ -874,6 +966,176 @@ function copyFormatted() {
 function useFormatted() {
   document.getElementById('fmt-input').value = document.getElementById('fmt-output').value;
   showToast('Copied to input');
+}
+
+// ─── AI Panel ──────────────────────────────────────────────────────────────────
+let aiChatMessages = [];
+let aiStreaming = false;
+
+function toggleAiPanel() {
+  document.getElementById('ai-panel').classList.contains('open') ? closeAiPanel() : openAiPanel();
+}
+
+function openAiPanel() {
+  const sel = document.getElementById('ai-preset-sel');
+  sel.innerHTML = presets.map((p, i) => `<option value="${i}">${p.name}</option>`).join('');
+  const curIdx = parseInt(document.getElementById('preset-sel').value) || 0;
+  sel.value = curIdx;
+  document.getElementById('ai-panel').classList.add('open');
+  document.getElementById('ai-toggle-btn').style.background = 'rgba(88,166,255,0.2)';
+  setTimeout(() => document.getElementById('ai-input').focus(), 320);
+}
+
+function closeAiPanel() {
+  document.getElementById('ai-panel').classList.remove('open');
+  document.getElementById('ai-toggle-btn').style.background = '';
+  if (activeTab === 'terminal') setTimeout(() => term.focus(), 320);
+}
+
+function clearAiChat() {
+  aiChatMessages = [];
+  document.getElementById('ai-chat-messages').innerHTML =
+    '<div class="ai-empty">ターミナルの出力についてAIに質問できます。<br>「Explain」「Suggest」ボタンですぐに分析できます。</div>';
+}
+
+function getTerminalContext(maxLines = 40) {
+  try {
+    const buf = term.buffer.active;
+    const lines = [];
+    const end = buf.length;
+    const start = Math.max(0, end - maxLines);
+    for (let i = start; i < end; i++) {
+      const line = buf.getLine(i);
+      if (line) {
+        const text = line.translateToString(true).trimEnd();
+        if (text) lines.push(text);
+      }
+    }
+    return lines.join('\n');
+  } catch(e) { return ''; }
+}
+
+function addAiBubble(role, content, streaming = false) {
+  const empty = document.querySelector('.ai-empty');
+  if (empty) empty.remove();
+  const el = document.createElement('div');
+  el.className = `ai-bubble ${role}${streaming ? ' streaming' : ''}`;
+  el.textContent = content;
+  const container = document.getElementById('ai-chat-messages');
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+  return el;
+}
+
+async function sendAiMessage(presetMsg) {
+  if (aiStreaming) return;
+  const input = document.getElementById('ai-input');
+  const content = presetMsg !== undefined ? presetMsg : input.value.trim();
+  if (!content) return;
+
+  const presetIdx = parseInt(document.getElementById('ai-preset-sel').value) || 0;
+  const preset = presets[presetIdx];
+  if (!preset || !preset.api_key) {
+    showToast('AI API タブで API キーを設定してください', 3000);
+    return;
+  }
+
+  if (presetMsg === undefined) input.value = '';
+
+  // Context injection
+  let apiContent = content;
+  if (document.getElementById('ai-ctx-toggle').checked) {
+    const ctx = getTerminalContext(40);
+    if (ctx) apiContent = `【ターミナル出力（直近）】\n\`\`\`\n${ctx}\n\`\`\`\n\n${content}`;
+  }
+
+  addAiBubble('user', content);
+
+  // Build request messages (last 20, with context on final message)
+  const requestMessages = [
+    ...aiChatMessages,
+    { role: 'user', content: apiContent },
+  ].slice(-20);
+
+  const assistantBubble = addAiBubble('assistant', '', true);
+  aiStreaming = true;
+  document.getElementById('ai-send-btn').disabled = true;
+
+  let fullText = '';
+  try {
+    const resp = await fetch('/api/ai-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: preset.provider,
+        endpoint: preset.endpoint,
+        api_key: preset.api_key,
+        model: preset.model || 'claude-opus-4-6',
+        system: preset.system || 'You are a helpful terminal assistant. Answer concisely in Japanese unless asked otherwise.',
+        messages: requestMessages,
+        max_tokens: 2048,
+        temperature: 1.0,
+      }),
+    });
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let sseBuffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sseBuffer += dec.decode(value, { stream: true });
+      const parts = sseBuffer.split('\n\n');
+      sseBuffer = parts.pop() ?? '';
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6);
+          if (raw === '[DONE]') { assistantBubble.classList.remove('streaming'); break; }
+          try {
+            const d = JSON.parse(raw);
+            if (d.text) {
+              fullText += d.text;
+              assistantBubble.textContent = fullText;
+              const c = document.getElementById('ai-chat-messages');
+              c.scrollTop = c.scrollHeight;
+            } else if (d.error) {
+              fullText = 'エラー: ' + d.error;
+              assistantBubble.textContent = fullText;
+            }
+          } catch(e) {}
+        }
+      }
+    }
+  } catch(e) {
+    fullText = 'エラー: ' + e.message;
+    assistantBubble.textContent = fullText;
+  }
+
+  assistantBubble.classList.remove('streaming');
+  aiChatMessages.push({ role: 'user', content });
+  if (fullText) aiChatMessages.push({ role: 'assistant', content: fullText });
+  aiStreaming = false;
+  document.getElementById('ai-send-btn').disabled = false;
+}
+
+function aiInputKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); }
+}
+
+async function aiExplain() {
+  if (!document.getElementById('ai-panel').classList.contains('open')) openAiPanel();
+  document.getElementById('ai-ctx-toggle').checked = true;
+  await new Promise(r => setTimeout(r, 60));
+  sendAiMessage('このターミナルの出力を確認して、エラーや問題があれば日本語で詳しく説明し、解決策を提案してください。');
+}
+
+async function aiSuggest() {
+  if (!document.getElementById('ai-panel').classList.contains('open')) openAiPanel();
+  document.getElementById('ai-ctx-toggle').checked = true;
+  await new Promise(r => setTimeout(r, 60));
+  sendAiMessage('現在のターミナルの状況を見て、次に実行すると便利なコマンドや作業の改善点を提案してください。');
 }
 
 // ─── PWA Service Worker ────────────────────────────────────────────────────────
